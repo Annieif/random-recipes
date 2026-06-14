@@ -29,7 +29,6 @@ public final class RecipeShuffler {
     private static Set<String> configProtectedOutputItems = Set.of();
     private static Set<String> configProtectedRecipeIds = Set.of();
 
-    /** 刷新配置快照（在 shuffle 前调用） */
     private static void refreshConfigSnapshot() {
         configProtectedOutputItems = RandomRecipesConfig.getProtectedOutputItems();
         configProtectedRecipeIds = RandomRecipesConfig.getProtectedRecipeIds();
@@ -41,21 +40,13 @@ public final class RecipeShuffler {
 
     // ==================== 对外入口 ====================
 
-    /**
-     * 对服务器中所有已注册的工作台配方执行随机化。
-     * 在 {@link net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents#SERVER_STARTED} 时调用。
-     */
     public static void shuffleAllRecipes(MinecraftServer server, long seed) {
         DynamicRegistryManager registryManager = server.getRegistryManager();
         RecipeManager manager = server.getRecipeManager();
         Map<Identifier, Recipe<?>> recipes = ((RecipeManagerAccessor) manager).getRecipesById();
-
         shuffleRecipes(recipes, registryManager, seed);
     }
 
-    /**
-     * 由 mixin 在 {@code /reload} 时调用（从当前 server 取 RegistryManager）。
-     */
     public static void shuffleRecipes(Map<Identifier, Recipe<?>> recipes, long seed) {
         MinecraftServer server = RandomRecipesMod.getCurrentServer();
         if (server == null) {
@@ -77,43 +68,71 @@ public final class RecipeShuffler {
         List<Map.Entry<Identifier, Recipe<?>>> craftingEntries = recipes.entrySet().stream()
                 .filter(e -> e.getValue().getType() == RecipeType.CRAFTING)
                 .filter(e -> !isProtected(e.getKey(), e.getValue(), registryManager))
-                .sorted(Map.Entry.comparingByKey())   // 固定顺序保证种子确定性
+                .sorted(Map.Entry.comparingByKey())
                 .collect(Collectors.toList());
 
-        LOGGER.info("Shuffling {} crafting recipes (seed={})", craftingEntries.size(), seed);
+        // 2. 建立全局物品池（所有配方中出现过的物品），供单材料配方使用
+        List<Item> globalItemPool = buildGlobalPool(craftingEntries, registryManager);
 
-        // 2. 逐个处理
+        LOGGER.info("Shuffling {} crafting recipes (seed={}), global pool size={}",
+                craftingEntries.size(), seed, globalItemPool.size());
+
+        // 3. 逐个处理
         for (Map.Entry<Identifier, Recipe<?>> entry : craftingEntries) {
             try {
-                processRecipe(entry.getValue(), random);
+                processRecipe(entry.getValue(), random, globalItemPool);
             } catch (Exception ex) {
                 LOGGER.warn("Failed to shuffle recipe {}: {}", entry.getKey(), ex.getMessage());
             }
         }
 
-        // 3. 重复检测
-        checkForDuplicates(recipes, registryManager);
+        // 4. 重复检测 + 修正
+        int duplicates = checkForDuplicates(recipes, registryManager);
+        if (duplicates > 0) {
+            LOGGER.warn("Found {} duplicate crafting recipes; applying conflict resolution", duplicates);
+            resolveDuplicates(recipes, craftingEntries, random, registryManager, globalItemPool);
+        }
 
         LOGGER.info("Recipe shuffling complete");
+    }
+
+    // ==================== 全局物品池 ====================
+
+    /** 收集所有工作台配方中出现过的非保护物品 */
+    private static List<Item> buildGlobalPool(
+            List<Map.Entry<Identifier, Recipe<?>>> entries,
+            DynamicRegistryManager registryManager) {
+        Set<Item> pool = new LinkedHashSet<>();
+        for (Map.Entry<Identifier, Recipe<?>> entry : entries) {
+            Recipe<?> recipe = entry.getValue();
+            if (isProtected(entry.getKey(), recipe, registryManager)) continue;
+            for (Ingredient ing : recipe.getIngredients()) {
+                if (ing == null || ing.isEmpty()) continue;
+                for (ItemStack stack : ing.getMatchingStacks()) {
+                    if (stack != null && !stack.isEmpty()) {
+                        pool.add(stack.getItem());
+                    }
+                }
+            }
+        }
+        pool.remove(Items.AIR);
+        return new ArrayList<>(pool);
     }
 
     // ==================== 保护检测 ====================
 
     private static boolean isProtected(Identifier recipeId, Recipe<?> recipe,
                                        DynamicRegistryManager registryManager) {
-        // 1) 硬编码三把镐子
         if (PROTECTED_RESULTS.contains(recipe.getOutput(registryManager).getItem())) {
             return true;
         }
 
-        // 2) 配置中 protected_output_items
         String outputId = Registries.ITEM.getId(
                 recipe.getOutput(registryManager).getItem()).toString();
         if (configProtectedOutputItems.contains(outputId)) {
             return true;
         }
 
-        // 3) 配置中 protected_recipe_ids
         if (configProtectedRecipeIds.contains(recipeId.toString())) {
             return true;
         }
@@ -123,7 +142,7 @@ public final class RecipeShuffler {
 
     // ==================== 配方处理流程 ====================
 
-    private static void processRecipe(Recipe<?> recipe, Random random) {
+    private static void processRecipe(Recipe<?> recipe, Random random, List<Item> globalPool) {
         DefaultedList<Ingredient> ingredients = recipe.getIngredients();
         if (ingredients.isEmpty()) return;
 
@@ -133,15 +152,25 @@ public final class RecipeShuffler {
         shuffleList(ingredients, random);
 
         // Step 2: 增减 / 替换
-        modifyIngredients(ingredients, random, isShapeless);
+        modifyIngredients(ingredients, random, isShapeless, globalPool);
     }
 
     // ==================== 打乱顺序 ====================
 
+    @SuppressWarnings("unchecked")
     private static void shuffleList(List<Ingredient> list, Random random) {
-        for (int i = list.size() - 1; i > 0; i--) {
+        // Fisher-Yates, 只对非空槽位洗牌
+        List<Integer> nonEmpty = new ArrayList<>();
+        for (int i = 0; i < list.size(); i++) {
+            Ingredient ing = list.get(i);
+            if (ing != null && !ing.isEmpty()) {
+                nonEmpty.add(i);
+            }
+        }
+        // 洗牌下标
+        for (int i = nonEmpty.size() - 1; i > 0; i--) {
             int j = random.nextInt(i + 1);
-            Collections.swap(list, i, j);
+            Collections.swap(list, nonEmpty.get(i), nonEmpty.get(j));
         }
     }
 
@@ -149,9 +178,29 @@ public final class RecipeShuffler {
 
     private static void modifyIngredients(DefaultedList<Ingredient> ingredients,
                                           Random random,
-                                          boolean canChangeSize) {
+                                          boolean canChangeSize,
+                                          List<Item> globalPool) {
         List<Item> availableItems = collectUsedItems(ingredients);
         if (availableItems.isEmpty()) return;
+
+        // ★ 核心修复：如果只有1种材料，从全局池补充候选
+        if (availableItems.size() <= 1 && globalPool != null && !globalPool.isEmpty()) {
+            // 取全局池中与该配方不同的物品，最多补充 5 种
+            Set<Item> expanded = new HashSet<>(availableItems);
+            Item existing = availableItems.get(0);
+            // 从全局池中随机挑选不重复的
+            List<Item> shuffledGlobal = new ArrayList<>(globalPool);
+            Collections.shuffle(shuffledGlobal, random);
+            for (Item item : shuffledGlobal) {
+                if (!item.equals(existing) && !item.equals(Items.AIR)) {
+                    expanded.add(item);
+                    if (expanded.size() >= 6) break; // 原1种 + 最多5种新
+                }
+            }
+            availableItems = new ArrayList<>(expanded);
+            LOGGER.debug("Expanded single-material pool from [{}] to {} items",
+                    Registries.ITEM.getId(existing), availableItems.size());
+        }
 
         int changes = 1 + random.nextInt(Math.min(2, canChangeSize ? 2 : 1));
 
@@ -202,8 +251,9 @@ public final class RecipeShuffler {
 
     // ==================== 重复检测 ====================
 
-    private static void checkForDuplicates(Map<Identifier, Recipe<?>> recipes,
-                                           DynamicRegistryManager registryManager) {
+    /** 返回检测到的重复配方对数 */
+    private static int checkForDuplicates(Map<Identifier, Recipe<?>> recipes,
+                                          DynamicRegistryManager registryManager) {
         Map<Item, Set<Set<Item>>> seen = new HashMap<>();
         int duplicateCount = 0;
 
@@ -212,19 +262,12 @@ public final class RecipeShuffler {
             if (recipe.getType() != RecipeType.CRAFTING) continue;
 
             Item result = recipe.getOutput(registryManager).getItem();
-            Set<Item> ingredientSet = new HashSet<>();
-            for (Ingredient ing : recipe.getIngredients()) {
-                if (ing == null || ing.isEmpty()) continue;
-                ItemStack[] stacks = ing.getMatchingStacks();
-                if (stacks != null && stacks.length > 0 && !stacks[0].isEmpty()) {
-                    ingredientSet.add(stacks[0].getItem());
-                }
-            }
+            Set<Item> ingredientSet = extractIngredientSet(recipe);
 
             Set<Set<Item>> existing = seen.computeIfAbsent(result, k -> new HashSet<>());
             if (!existing.add(ingredientSet)) {
                 duplicateCount++;
-                LOGGER.warn("Duplicate recipe detected: {} → {} (ingredients: {})",
+                LOGGER.warn("Duplicate recipe: {} → {} (materials: {})",
                         entry.getKey(),
                         result.getName().getString(),
                         ingredientSet.stream()
@@ -232,11 +275,70 @@ public final class RecipeShuffler {
                                 .collect(Collectors.toSet()));
             }
         }
+        return duplicateCount;
+    }
 
-        if (duplicateCount > 0) {
-            LOGGER.warn("Found {} duplicate crafting recipes after shuffling", duplicateCount);
-        } else {
-            LOGGER.info("No duplicate recipes found after shuffling");
+    /** 提取配方中非空原料的 Item 集合 */
+    private static Set<Item> extractIngredientSet(Recipe<?> recipe) {
+        Set<Item> set = new HashSet<>();
+        for (Ingredient ing : recipe.getIngredients()) {
+            if (ing == null || ing.isEmpty()) continue;
+            ItemStack[] stacks = ing.getMatchingStacks();
+            if (stacks != null && stacks.length > 0 && !stacks[0].isEmpty()) {
+                set.add(stacks[0].getItem());
+            }
         }
+        return set;
+    }
+
+    // ==================== 重复修正 ====================
+
+    /** 对重复配方做二次随机化，强制破坏相同性 */
+    private static void resolveDuplicates(Map<Identifier, Recipe<?>> recipes,
+                                          List<Map.Entry<Identifier, Recipe<?>>> entries,
+                                          Random random,
+                                          DynamicRegistryManager registryManager,
+                                          List<Item> globalPool) {
+        // 分组：(产物, 原料集合) → 配方列表
+        Map<Item, Map<Set<Item>, List<Recipe<?>>>> groups = new HashMap<>();
+
+        for (Map.Entry<Identifier, Recipe<?>> entry : entries) {
+            Recipe<?> recipe = entry.getValue();
+            Item result = recipe.getOutput(registryManager).getItem();
+            Set<Item> ingredientSet = extractIngredientSet(recipe);
+
+            groups.computeIfAbsent(result, k -> new HashMap<>())
+                    .computeIfAbsent(ingredientSet, k -> new ArrayList<>())
+                    .add(recipe);
+        }
+
+        int fixed = 0;
+        for (Map.Entry<Item, Map<Set<Item>, List<Recipe<?>>>> resultGroup : groups.entrySet()) {
+            for (Map.Entry<Set<Item>, List<Recipe<?>>> ingGroup : resultGroup.getValue().entrySet()) {
+                List<Recipe<?>> dupes = ingGroup.getValue();
+                if (dupes.size() <= 1) continue;
+
+                // 保留第一个，修改后面的
+                for (int i = 1; i < dupes.size(); i++) {
+                    Recipe<?> dupe = dupes.get(i);
+                    DefaultedList<Ingredient> ingredients = dupe.getIngredients();
+                    if (ingredients.isEmpty()) continue;
+
+                    // 强行替换一个非空槽位为全局池中的随机物品
+                    List<Integer> nonEmpty = new ArrayList<>();
+                    for (int j = 0; j < ingredients.size(); j++) {
+                        Ingredient ing = ingredients.get(j);
+                        if (ing != null && !ing.isEmpty()) nonEmpty.add(j);
+                    }
+                    if (!nonEmpty.isEmpty() && globalPool != null && !globalPool.isEmpty()) {
+                        int slot = nonEmpty.get(random.nextInt(nonEmpty.size()));
+                        Item newItem = globalPool.get(random.nextInt(globalPool.size()));
+                        ingredients.set(slot, Ingredient.ofItems(newItem));
+                        fixed++;
+                    }
+                }
+            }
+        }
+        LOGGER.info("Resolved {} duplicate conflicts", fixed);
     }
 }
