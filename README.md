@@ -1,5 +1,9 @@
 # Random Recipes
 
+![Build](https://github.com/Annieif/random-recipes/actions/workflows/build.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/Annieif/random-recipes)
+![MIT License](https://img.shields.io/badge/license-MIT-green)
+
 ![Random Recipes icon](icon.png)
 
 基于世界种子的工作台配方全局随机化 Fabric Mod。

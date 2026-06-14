@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Generate Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.7
+          chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Collect release artifacts
+        id: artifacts
+        run: |
+          ls -lh build/libs/
+          echo "files=$(ls build/libs/*.jar | tr '\n' ' ')" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          cat > release_body.md <<EOF
+          # Random Recipes $VERSION
+
+          基于世界种子的工作台配方全局随机化 Fabric Mod。
+
+          ## 安装
+          - Fabric Loader ≥ 0.15
+          - Fabric API
+          - Minecraft 1.20.1
+
+          将 random-recipes-$VERSION.jar 放入 mods/ 目录。
+
+          ## 变更
+          - 查看 [README](https://github.com/${{ github.repository }}/blob/main/README.md)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_body.md
+          draft: false
+          files: build/libs/*.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

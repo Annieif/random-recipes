@@ -1,6 +1,9 @@
 # Gradle
 .gradle/
 build/
+out/
+
+# Gradle wrapper properties 保留, jar 在 CI 中自动生成
 gradle/wrapper/gradle-wrapper.jar
 
 # IDE
@@ -18,7 +21,13 @@ Thumbs.db
 # Java
 *.class
 *.log
-out/
 
 # Mod specific
 run/
+
+# 临时/编译产物
+icon-64.png
+# GenerateIcon.java 保留为源码
+
+# GitHub Pages / artifacts
+*.zip
