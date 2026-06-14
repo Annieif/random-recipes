@@ -19,22 +19,14 @@ jobs:
         with:
           java-version: 17
           distribution: temurin
-          java-package: jdk
 
-      - name: Set up Gradle
+      - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-          cache-read-only: false
-
-      - name: Generate Gradle Wrapper
-        run: |
-          # 项目不提交 gradle-wrapper.jar, 在此自动生成
-          gradle wrapper --gradle-version 8.7
-          chmod +x gradlew
 
       - name: Build with Gradle
-        run: ./gradlew build
+        run: gradle build --no-daemon
 
       - name: List build artifacts
         run: ls -lh build/libs/
