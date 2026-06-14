@@ -1,0 +1,14 @@
+{
+    "required": true,
+    "package": "com.randomrecipes.mixin",
+    "compatibilityLevel": "JAVA_17",
+    "mixins": [
+        "RecipeManagerMixin"
+    ],
+    "accessors": [
+        "RecipeManagerAccessor"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

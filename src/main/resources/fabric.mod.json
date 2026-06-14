@@ -1,0 +1,35 @@
+{
+    "schemaVersion": 1,
+    "id": "random-recipes",
+    "version": "${version}",
+    "name": "Random Recipes",
+    "description": "基于世界种子的配方全局随机化 Mod。进入世界时用世界种子码确定性打乱所有工作台配方——物品顺序打乱、增减替换原料、重复检测三步骤。木/石/铁镐默认受保护，其他 Mod 的配方自动纳入，支持配置文件手动添加特判。同一个存档配方永远相同，不同存档则完全不同。",
+    "authors": [
+        "Annieif"
+    ],
+    "contact": {
+        "homepage": "https://github.com/Annieif",
+        "issues": "https://github.com/Annieif/random-recipes/issues",
+        "sources": "https://github.com/Annieif/random-recipes"
+    },
+    "license": "MIT",
+    "icon": "assets/random-recipes/icon.png",
+    "environment": "*",
+    "entrypoints": {
+        "main": [
+            "com.randomrecipes.RandomRecipesMod"
+        ]
+    },
+    "mixins": [
+        "mixins.randomrecipes.json"
+    ],
+    "depends": {
+        "fabricloader": ">=${loader_version}",
+        "minecraft": "~${minecraft_version}",
+        "java": ">=17",
+        "fabric-api": "*"
+    },
+    "suggests": {
+        "roughlyenoughitems": "REI helps visualize the shuffled recipes"
+    }
+}
