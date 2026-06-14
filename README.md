@@ -1,5 +1,7 @@
 # Random Recipes
 
+![Random Recipes icon](icon.png)
+
 基于世界种子的工作台配方全局随机化 Fabric Mod。
 
 进入世界时，用世界种子码**确定性**打乱所有工作台（crafting table）配方。同一存档配方永远相同，不同存档则完全不同。
